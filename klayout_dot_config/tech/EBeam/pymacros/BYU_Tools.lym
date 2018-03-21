@@ -131,7 +131,7 @@ class Uarray_fullRing(pya.PCellDeclarationHelper):
       wg2 = Box(ringX-r-ringRW/2-ringLC/2, centerY-distFromRingToWG, ringX+r+ringRW/2+ringLC/2, centerY-distFromRingToWG - ringBW)
       
       shapes(LayerSiN).insert(wg1)
-      shapes(LayerSiN).insert(wg2)
+      #shapes(LayerSiN).insert(wg2)
       
     def genEdgeCoupler(taperX,taperY,taperWidth,waveguideWidth,taperLength):
 
