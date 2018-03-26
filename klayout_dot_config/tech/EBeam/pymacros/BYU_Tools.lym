@@ -27,6 +27,166 @@ NOTE: after changing the code, the macro needs to be rerun to install the new
 implementation. The macro is also set to "auto run" to install the PCell 
 when KLayout is run.
 """
+class doubleCouple(pya.PCellDeclarationHelper):
+  """
+  The PCell declaration for the circle
+  """
+
+  def __init__(self):
+    
+    # Important: initialize the super class
+    super(doubleCouple, self).__init__()
+    
+    TECHNOLOGY = get_technology_by_name('EBeam')
+    
+    # declare the parameters
+    self.param("silayer", self.TypeLayer, "Si Layer", default = TECHNOLOGY['Waveguide'])
+    self.param("numCouplers", self.TypeDouble, "Number of couplers", default = 10)
+    self.param("couplerSep", self.TypeDouble, "Separation distance between couplers", default = 127)
+    
+    self.param("tw", self.TypeDouble, "Taper width (microns)", default = 0.180)
+    self.param("ww", self.TypeDouble, "Waveguide width (microns)", default = 0.5)
+    self.param("tL", self.TypeDouble, "Taper length (microns)", default = 50)
+    self.param("bufferLength", self.TypeDouble, "Buffer length (microns)", default = 10)
+    
+    self.param("r", self.TypeDouble, "Ring radius (microns)", default = 5)
+    self.param("rw", self.TypeDouble, "Ring waveguide width", default = 0.5)
+    self.param("bw", self.TypeDouble, "Bus waveguide width", default = 0.5)
+    self.param("g", self.TypeDouble, "Gap", default = 0.2)
+    self.param("Lc", self.TypeDouble, "Coupler Length", default = 0.0)
+    
+    self.param("orthogonal_identifier", self.TypeInt, "Orthogonal identifier (1=TE, 2=TM)", default = 1)     
+    self.param("pinrec", self.TypeLayer, "PinRec Layer", default = TECHNOLOGY['PinRec'])
+    self.param("devrec", self.TypeLayer, "DevRec Layer", default = TECHNOLOGY['DevRec'])
+    self.param("textl", self.TypeLayer, "Text Layer", default = TECHNOLOGY['Text'])
+
+  def display_text_impl(self):
+    # Provide a descriptive text for the cell
+    return "doubleCouple(numCouplers=" + str(self.numCouplers) + ",couplerSep=" + ('%.3f' % self.couplerSep) + ")"
+  
+  def can_create_from_shape_impl(self):
+    # Implement the "Create PCell from shape" protocol: we can use any shape which 
+    # has a finite bounding box
+    return False
+  
+  def produce_impl(self):
+    # This is the main part of the implementation: create the layout
+    from math import pi, cos, sin
+    from SiEPIC.utils import arc_wg, arc_wg_xy
+    from SiEPIC._globals import PIN_LENGTH
+    
+    # fetch the parameters
+    dbu = self.layout.dbu
+    ly = self.layout
+    shapes = self.cell.shapes
+    
+    LayerSiN = ly.layer(self.silayer)
+    LayerPinRecN = ly.layer(self.pinrec)
+    LayerDevRecN = ly.layer(self.devrec)
+    TextLayerN = ly.layer(self.textl)
+
+    numCouplers = int(round(self.numCouplers))
+    couplerSep = int(round(self.couplerSep/dbu))
+    
+    tw = int(round(self.tw/dbu))     # taper width
+    ww = int(round(self.ww/dbu))   # waveguide width
+    tL = int(round(self.tL/dbu))       # taper length
+    bufferLength = int(round(self.bufferLength/dbu))       # buffer length
+    
+    r = int(round(self.r/dbu))          # ring radius
+    rw = int(round(self.rw/dbu))     # ring waveguide width
+    bw = int(round(self.bw/dbu))   # bus waveguide width
+    g = int(round(self.g/dbu))        # gap
+    Lc = int(round(self.Lc/dbu))     # Coupler length
+    
+    cornerRadius = int(round(15/dbu))    # 15 microns for TM modes
+    
+    # ------------------------ define geometries ---------------------------- #
+    
+    def genRingResonator(ringX,ringY,ringR,ringRW,ringBW,ringG,ringLC):
+      centerX = ringX;
+      centerY = -(ringR + ringG + ringRW/2 + ringBW/2) + ringY
+      
+      # draw the circle
+      self.cell.shapes(LayerSiN).insert(arc_wg_xy(ringX+ringLC/2, centerY, ringR, ringRW, 0, 90))
+      self.cell.shapes(LayerSiN).insert(arc_wg_xy(ringX-ringLC/2, centerY, ringR, ringRW, 90, 180))
+      self.cell.shapes(LayerSiN).insert(arc_wg_xy(ringX-ringLC/2, centerY, ringR, ringRW, 180, 270))
+      self.cell.shapes(LayerSiN).insert(arc_wg_xy(ringX+ringLC/2, centerY, ringR, ringRW, 270, 360))
+      
+      # add top and bottom coupler length
+      wg1 = Box(ringX+-ringLC/2, centerY+r-ringRW/2, ringX+ringLC/2, centerY+r+ringRW/2)
+      wg2 = Box(ringX+-ringLC/2, centerY-r+ringRW/2, ringX+ringLC/2, centerY-r -ringRW/2)
+      
+      shapes(LayerSiN).insert(wg1)
+      shapes(LayerSiN).insert(wg2)          
+      
+      # add top and bottom bus
+      distFromRingToWG = r + ringRW/2 + ringG
+      
+      wg1 = Box(ringX-r-ringRW/2-ringLC/2, centerY+distFromRingToWG, ringX+r+ringRW/2+ringLC/2, centerY+distFromRingToWG + ringBW)
+      wg2 = Box(ringX-r-ringRW/2-ringLC/2, centerY-distFromRingToWG, ringX+r+ringRW/2+ringLC/2, centerY-distFromRingToWG - ringBW)
+      
+      shapes(LayerSiN).insert(wg1)
+      #shapes(LayerSiN).insert(wg2)
+      
+    def genEdgeCoupler(taperX,taperY,taperWidth,waveguideWidth,taperLength):
+
+      pts = [Point(taperX,taperY-taperWidth/2), Point(taperX,taperY + taperWidth/2), Point(taperX+taperLength,taperY+waveguideWidth/2), Point(taperX+taperLength,taperY-waveguideWidth/2)]
+      shapes(LayerSiN).insert(Polygon(pts))
+    
+    # ------------------------ draw layout ---------------------------- #
+    currentX = 0;  #microns
+    currentY = 0;  #microns
+    
+    chipEdge = (numCouplers+1) * couplerSep
+    
+    for iterX in range(0,numCouplers):
+      
+      coupler1Y = iterX*couplerSep;
+      
+      #draw first buffer
+      wg1 = Box(0,-coupler1Y + tw/2,bufferLength,-coupler1Y-tw/2)
+      shapes(LayerSiN).insert(wg1)
+      
+      # draw the taper
+      genEdgeCoupler(bufferLength,-coupler1Y,tw,ww,tL)
+      
+      # draw the ringResonator
+      ringX = (iterX)*couplerSep +bufferLength + tL + r ;
+      ringY = iterX * couplerSep
+      print(ringY)
+      genRingResonator(ringX,-ringY,r,rw,bw,g,Lc)
+      
+      # draw the waveguide connecting the taper and top bus of ring
+      wg1 = Box(tL + bufferLength,-ringY+bw/2,ringX,-ringY-bw/2)
+      shapes(LayerSiN).insert(wg1)
+      
+      # draw the next taper
+      genEdgeCoupler(chipEdge,-coupler1Y,ww,tw,tL)
+      
+      #draw next buffer
+      wg1 = Box(chipEdge+tL,-coupler1Y + tw/2,chipEdge+tL+bufferLength,-coupler1Y-tw/2)
+      shapes(LayerSiN).insert(wg1)
+      
+      # draw the waveguide extending the top bus
+      wg1 = Box(ringX,-ringY - bw/2,chipEdge,-ringY+bw/2)
+      shapes(LayerSiN).insert(wg1)
+    
+
+
+    # Merge all the waveguide shapes, to avoid any small gaps
+    layer_temp = self.layout.layer(LayerInfo(913, 0))
+    shapes_temp = self.cell.shapes(layer_temp)
+    ShapeProcessor().merge(self.layout,self.cell,LayerSiN,shapes_temp,True,0,True,True)
+    self.cell.shapes(LayerSiN).clear()
+    shapes_SiN = self.cell.shapes(LayerSiN)
+    ShapeProcessor().merge(self.layout,self.cell,layer_temp, shapes_SiN,True,0,True,True)
+    self.cell.shapes(layer_temp).clear()
+    
+
+
+
+
 
 class Uarray_fullRing(pya.PCellDeclarationHelper):
   """
@@ -215,6 +375,8 @@ class BYULib(pya.Library):
     
     # Create the PCell declarations
     self.layout().register_pcell("Uarray_fullRing", Uarray_fullRing())
+    self.layout().register_pcell("doubleCouple", doubleCouple())
+    
     # That would be the place to put in more PCells ...
     
     # Register us with the name "MyLib".
